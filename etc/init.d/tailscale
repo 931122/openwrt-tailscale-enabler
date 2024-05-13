@@ -7,29 +7,86 @@ USE_PROCD=1
 START=99
 STOP=1
 
+file_check () {
+	install_dir=$1
+	if [ ! -f $install_dir/tailscale ]; then
+	    arch=`uname -m`
+	    if [ "$arch" == "mips" ]; then
+	        endianness=`echo -n I | hexdump -o | awk '{ print (substr($2,6,1)=="1") ? "le" : ""; exit }'`
+	    elif [ "$arch" == "armv7l" ]; then
+	        arch=arm
+	    elif [ "$arch" == "aarch64" ]; then
+	        arch=arm64
+	    elif [ "$arch" == "x86_64" ]; then
+	        arch=amd64
+	    fi
+
+	    tailscale_version=""
+
+	    latest_version=`wget -O- https://pkgs.tailscale.com/stable/ | grep tailscale_ | head -1 | cut -d'_' -f 2`
+	    if [ "$tailscale_version" != "$latest_version" ]; then
+	        tailscale_version=$latest_version
+	    fi
+
+	    version="${tailscale_version}_${arch}${endianness}"
+
+	    echo "Downloading Tailscale ${version} .."
+
+	    echo -e "tailscale_${version}/tailscale" > /tmp/tailscale_${version}_files.txt
+	    echo -e "tailscale_${version}/tailscaled" >> /tmp/tailscale_${version}_files.txt
+
+	    wget -O- https://pkgs.tailscale.com/stable/tailscale_${version}.tgz | tar x -zvf - -C /tmp -T /tmp/tailscale_${version}_files.txt
+
+	    mv /tmp/tailscale_$version/* $install_dir
+	    rm -rf /tmp/tailscale_${version}*
+
+	    echo "Done!"
+	fi
+}
+
+start_instance() {
+	local cfg="$1"
+	local val
+
+	config_get_bool val "$cfg" 'disabled' '0'
+	[ "$val" = 1 ] && return 1
+
+	procd_open_instance
+
+	config_get val "$cfg" "install_dir" "/tmp"
+
+	file_check $val
+
+	procd_set_param command  $val/tailscaled
+	config_get val "$cfg" "port" "41641"
+	procd_append_param command --port $val
+
+	# OpenWRT /var is a symlink to /tmp, so write persistent state elsewhere.
+	procd_append_param command --state /etc/config/tailscaled.state
+
+	# Persist files for TLS cert & Taildrop files
+	procd_append_param command --statedir /etc/tailscale/
+
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
 start_service() {
-  procd_open_instance
-  procd_set_param command /usr/bin/tailscaled
+	config_load tailscale
+	config_foreach start_instance tailscale
+}
 
-  # Set the port to listen on for incoming VPN packets.
-  # Remote nodes will automatically be informed about the new port number,
-  # but you might want to configure this in order to set external firewall
-  # settings.
-  procd_append_param command --port 41641
+stop_instance() {
+	local cfg="$1"
+	local val
 
-  # OpenWRT /var is a symlink to /tmp, so write persistent state elsewhere.
-  procd_append_param command --state /etc/config/tailscaled.state
-  
-  # Persist files for TLS cert & Taildrop files
-  procd_append_param command --statedir /etc/tailscale/
-
-  procd_set_param respawn
-  procd_set_param stdout 1
-  procd_set_param stderr 1
-
-  procd_close_instance
+	config_get val "$cfg" "install_dir" "/tmp"
+	$val/tailscaled --cleanup
 }
 
 stop_service() {
-  /usr/bin/tailscaled --cleanup
+	config_load tailscale
+	config_foreach stop_instance tailscale
 }
