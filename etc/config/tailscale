@@ -1,4 +1,16 @@
-config tailscale
+config common 'common'
+	option install_dir '/mnt/sdb'
+
+config tailscaled
 	option disabled '0'
 	option port '41641'
-	option install_dir '/tmp/'
+
+config derper
+	option disabled '0'
+	option hostname 'xxx.xxx.com'
+	option conf_file '/etc/derper.conf'
+	option https_port '12345'
+	option http_port '-1'
+	option certdir '/etc/acme/for_derper'
+	option certmode 'manual'
+	option verify_clients 'false'
